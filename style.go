@@ -3,6 +3,7 @@ package lipgloss
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/muesli/reflow/truncate"
 	"github.com/muesli/reflow/wordwrap"
@@ -261,6 +262,7 @@ func (s Style) Render(strs ...string) string {
 		te = te.Faint()
 	}
 
+	// if !fg.Dynamic() {
 	if fg != noColor {
 		te = te.Foreground(fg.color(s.r))
 		if styleWhitespace {
@@ -270,7 +272,9 @@ func (s Style) Render(strs ...string) string {
 			teSpace = teSpace.Foreground(fg.color(s.r))
 		}
 	}
+	// }
 
+	// if !bg.Dynamic() {
 	if bg != noColor {
 		te = te.Background(bg.color(s.r))
 		if colorWhitespace {
@@ -280,6 +284,7 @@ func (s Style) Render(strs ...string) string {
 			teSpace = teSpace.Background(bg.color(s.r))
 		}
 	}
+	// }
 
 	if underline {
 		te = te.Underline()
@@ -315,20 +320,34 @@ func (s Style) Render(strs ...string) string {
 		var b strings.Builder
 
 		l := strings.Split(str, "\n")
-		for i := range l {
-			if useSpaceStyler {
+		for y := range l {
+			// if useSpaceStyler {
+			// TODO: dirty, dirty hack for POC.
+			// "Right way" is probably better color abstraction and/or
+			// abstraction around termenv.Style or refactor to use per-render
+			// te in an additive/builder way.
+			if useSpaceStyler || isDynamic(fg) {
+				runeLen := utf8.RuneCountInString(l[y])
 				// Look for spaces and apply a different styler
-				for _, r := range l[i] {
-					if unicode.IsSpace(r) {
-						b.WriteString(teSpace.Styled(string(r)))
+				for x, r := range l[y] {
+					if useSpaceStyler {
+						if unicode.IsSpace(r) {
+							b.WriteString(teSpace.Styled(string(r)))
+							continue
+						}
+					}
+					if isDynamic(fg) {
+						dyn := fg.(DynamicColor)
+						b.WriteString(te.Foreground(dyn.dColor(s.r, x, y, runeLen, len(l))).Styled(string(r)))
+						// b.WriteString(te.Foreground(dyn.dColor(s.r, y, x, len(l), runeLen)).Styled(string(r)))
 						continue
 					}
 					b.WriteString(te.Styled(string(r)))
 				}
 			} else {
-				b.WriteString(te.Styled(l[i]))
+				b.WriteString(te.Styled(l[y]))
 			}
-			if i != len(l)-1 {
+			if y != len(l)-1 {
 				b.WriteRune('\n')
 			}
 		}

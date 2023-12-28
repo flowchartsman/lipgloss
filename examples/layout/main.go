@@ -30,6 +30,16 @@ var (
 	subtle    = lipgloss.AdaptiveColor{Light: "#D9DCCF", Dark: "#383838"}
 	highlight = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}
 	special   = lipgloss.AdaptiveColor{Light: "#43BF6D", Dark: "#73F59F"}
+	flame     = &lipgloss.GradientColor{
+		Stops: []string{
+			"#000000",
+			"#ba0000",
+			"#ff8b32",
+			"#f8ef13",
+			"#f9f7d4",
+		},
+		Offsets: []float64{0, 0.594324, 0.809683, 0.899833, 1},
+	}
 
 	divider = lipgloss.NewStyle().
 		SetString("•").
@@ -149,12 +159,13 @@ var (
 
 	historyStyle = lipgloss.NewStyle().
 			Align(lipgloss.Left).
-			Foreground(lipgloss.Color("#FAFAFA")).
-			Background(highlight).
-			Margin(1, 3, 0, 0).
-			Padding(1, 2).
-			Height(19).
-			Width(columnWidth)
+			Foreground(flame).
+		// Foreground(lipgloss.Color("#FAFAFA")).
+		// Background(highlight).
+		Margin(1, 3, 0, 0).
+		Padding(1, 2).
+		Height(19).
+		Width(columnWidth)
 
 	// Status Bar.
 
@@ -244,6 +255,7 @@ func main() {
 			dialogBoxStyle.Render(ui),
 			lipgloss.WithWhitespaceChars("猫咪"),
 			lipgloss.WithWhitespaceForeground(subtle),
+			// lipgloss.WithWhitespaceForeground(flame),
 		)
 
 		doc.WriteString(dialog + "\n\n")

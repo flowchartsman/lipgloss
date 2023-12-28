@@ -3,13 +3,24 @@ package lipgloss
 import (
 	"strconv"
 
+	"github.com/charmbracelet/lipgloss/jzazbz"
 	"github.com/muesli/termenv"
 )
+
+// DynamicColor is a color that changes depending on its position on the screen.
+type DynamicColor interface {
+	dColor(r *Renderer, x, y, xMax, yMax int) termenv.Color
+}
 
 // TerminalColor is a color intended to be rendered in the terminal.
 type TerminalColor interface {
 	color(*Renderer) termenv.Color
 	RGBA() (r, g, b, a uint32)
+}
+
+func isDynamic(tc TerminalColor) bool {
+	_, ok := tc.(DynamicColor)
+	return ok
 }
 
 var noColor = NoColor{}
@@ -169,4 +180,53 @@ func (cac CompleteAdaptiveColor) color(r *Renderer) termenv.Color {
 // Deprecated.
 func (cac CompleteAdaptiveColor) RGBA() (r, g, b, a uint32) {
 	return termenv.ConvertToRGB(cac.color(renderer)).RGBA()
+}
+
+// GradientColor is a dynamic color that creates a perceptually-smooth
+// transition between Stops, with optional Offsets between 0 and 1.
+// If provided, Offsets must be sorted and must satisfy the following
+// invariant: 0 <= Offsets[n] < Offsets[n+1] <=1
+//
+// Invalid colors or offsets will result in a black gradient.
+type GradientColor struct {
+	g       *jzazbz.Gradient
+	Stops   []string
+	Offsets []float64
+}
+
+func (gc *GradientColor) init() {
+	if gc.g != nil {
+		return
+	}
+	gc.g = jzazbz.NewGradient(gc.Stops, gc.Offsets)
+	// // TODO: invariant check and clamp if Stops[0] > 0 || Stops[n] < 1.0
+	// // TODO: jzazbz.NewGradient(gc.Stops, gc.Offsets)
+	// g := &jzazbz.Gradient{
+	// 	Stops: make([]jzazbz.Stop, len(gc.Stops)),
+	// }
+	// for i := range g.Stops {
+	// 	g.Stops[i].Color = jzazbz.FromHex(gc.Stops[i])
+	// 	// TODO: not good enough to ensure sorted invariant
+	// 	if len(gc.Offsets) > i {
+	// 		g.Stops[i].Offset = gc.Offsets[i]
+	// 	} else {
+	// 		g.Stops[i].Offset = 1.0 / float64(len(gc.Stops)) * float64(i)
+	// 	}
+	// }
+	// gc.g = g
+}
+
+func (gc *GradientColor) RGBA() (r, g, b, a uint32) {
+	gc.init()
+	return gc.g.Color(0).RGBA()
+}
+
+func (gc *GradientColor) color(r *Renderer) termenv.Color {
+	gc.init()
+	return r.colorProfile.Color(gc.g.Color(0).Hex())
+}
+
+func (gc *GradientColor) dColor(r *Renderer, x, y, xMax, yMax int) termenv.Color {
+	gc.init()
+	return r.colorProfile.Color(gc.g.ColorAt(x, xMax).Hex())
 }
