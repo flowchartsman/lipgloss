@@ -1,7 +1,12 @@
 /*
-Go implementation of color math in the JzAzBz color space as described in "[Perceptually uniform color space for image signals including high dynamic range and wide gamut]"
+Package jzazbz implements color math in the JzAzBz color space.
 
-JzAzBz was designed to provide a color space capable of predicting both small and large color differences and accurate lightness values in high dynamic range environments with minimum computational cost. It is perceptually uniform over a wide gamut, and linear in iso-hue directions, allowing for more natural color gradients. Colors in this space are comprised of three components:
+JzAzBz was designed to provide a color space capable of predicting both small
+and large color differences and accurate lightness values in high dynamic range
+environments with minimum computational cost. It is perceptually uniform over a
+wide gamut, and linear in iso-hue directions, allowing for more natural color
+gradients. Colors in this space are calculated relative to standard illuminant
+D65, and are comprised of three components:
 
 	+-----------+-------------+---------+
 	| Component | Description |  Range  |
@@ -11,11 +16,17 @@ JzAzBz was designed to provide a color space capable of predicting both small an
 	| b         | blue-yellow | [-1, 1] |
 	+-----------+-------------+---------+
 
-JzAzBz is always calculated relative to standard illuminant D65.
+JzAzBz reference paper:
+https://opg.optica.org/oe/fulltext.cfm?uri=oe-25-13-15131&id=368272
 
-Implementation based in part on Kotlin implementation at https://github.com/ajalt/colormath
+JzAzBz implementation based on the Javascript at
+https://observablehq.com/@jrus/jzazbz
 
-[Perceptually uniform color space for image signals including high dynamic range and wide gamut]: https://opg.optica.org/oe/fulltext.cfm?uri=oe-25-13-15131&id=368272
+Supplemental sRGB -> lRGB transformation math from:
+https://entropymine.com/imageworsener/srgbformula/
+
+Precomputed lRGB -> CIE XYZ matrices from:
+http://www.brucelindbloom.com/index.html?Eqn_RGB_to_XYZ.html
 */
 package jzazbz
 
@@ -25,12 +36,27 @@ import (
 	"sort"
 )
 
+// BadGradient is returned if the provided gradient configuration is incorrect.
 var BadGradient = &Gradient{}
 
-type Gradient struct {
-	Stops []Stop
+func black() *Color {
+	return &Color{0, 0, 0}
 }
 
+// Gradient is a multi-stop color gradient in the JzAzBz color space. Colors are
+// interpolated using a basic linear interpolation along each component axis.
+type Gradient struct {
+	stops []stop
+}
+
+// NewGradient creates a new color gradient from one or more color stops in sRGB
+// hex format (#RRGGBB), along with an optional list of color stop offsets
+// between 0 and 1. If provided, offsets must be a sorted list of float64
+// offsets between 0 and 1, and must be the same length as stops. If offsets are
+// not provided, colors will be spread evenly across the gradient with stops[0]
+// at offset 0 and stops[len(stops)-1] at offset 1.
+// Invalid color stops will be replaced with black. Invalid offsets will return
+// [BadGradient]
 func NewGradient(stops []string, offsets []float64) *Gradient {
 	if len(stops) == 0 {
 		return BadGradient
@@ -51,10 +77,10 @@ func NewGradient(stops []string, offsets []float64) *Gradient {
 		}
 	}
 	g := &Gradient{
-		Stops: make([]Stop, len(stops)),
+		stops: make([]stop, len(stops)),
 	}
 	for i := range stops {
-		g.Stops[i] = Stop{
+		g.stops[i] = stop{
 			Color:  FromHex(stops[i]),
 			Offset: offsets[i],
 		}
@@ -63,46 +89,46 @@ func NewGradient(stops []string, offsets []float64) *Gradient {
 }
 
 func (g *Gradient) Color(idx int) *Color {
-	if len(g.Stops) > idx {
-		return g.Stops[idx].Color
+	if len(g.stops) > idx {
+		return g.stops[idx].Color
 	}
-	return &Color{0, 0, 0}
+	return black()
 }
 
 func (g *Gradient) ColorAt(pos, max int) *Color {
-	switch len(g.Stops) {
+	switch len(g.stops) {
 	case 0:
-		return &Color{0, 0, 0}
+		return black()
 	case 1:
-		return g.Stops[0].Color
+		return g.stops[0].Color
 	}
 
 	switch pos {
 	case 0:
-		return g.Stops[0].Color
+		return g.stops[0].Color
 	case max:
-		return g.Stops[len(g.Stops)-1].Color
+		return g.stops[len(g.stops)-1].Color
 	}
 	f := float64(pos) / float64(max)
 	var s int
-	for s = 0; s < len(g.Stops); s++ {
-		if f < g.Stops[s].Offset {
+	for s = 0; s < len(g.stops); s++ {
+		if f < g.stops[s].Offset {
 			break
 		}
 	}
 	switch s {
 	case 0:
-		return g.Stops[0].Color
-	case len(g.Stops):
-		return g.Stops[len(g.Stops)-1].Color
+		return g.stops[0].Color
+	case len(g.stops):
+		return g.stops[len(g.stops)-1].Color
 	}
 	// normalize 0.0-1.0 between stops
-	f = (f - g.Stops[s-1].Offset) / (g.Stops[s].Offset - g.Stops[s-1].Offset)
-	return (g.Stops[s-1].Color.blend(g.Stops[s].Color, f))
+	f = (f - g.stops[s-1].Offset) / (g.stops[s].Offset - g.stops[s-1].Offset)
+	return (g.stops[s-1].Color.blend(g.stops[s].Color, f))
 }
 
-// Stop is a gradient stop. Pos is (0,1)
-type Stop struct {
+// stop is a gradient stop. Offset is (0,1)
+type stop struct {
 	Color  *Color
 	Offset float64
 }
@@ -114,35 +140,58 @@ type Color struct {
 	b float64
 }
 
-// FromHex converts a hex color to JzAzBz
-// invalid colors will result in black.
-func FromHex(colStr string) *Color {
-	format := "#%02x%02x%02x"
-	factor := 1.0 / 255.0
-	if len(colStr) == 4 {
-		format = "#%1x%1x%1x"
-		factor = 1.0 / 15.0
-	}
+func (c *Color) Hex() string {
+	r, g, b := c.sRGB()
+	return fmt.Sprintf("#%02x%02x%02x", uint8(r), uint8(g), uint8(b))
+}
 
-	var hr, hg, hb uint8
-	n, err := fmt.Sscanf(colStr, format, &hr, &hg, &hb)
-	if err != nil {
-		return &Color{0, 0, 0}
+// RGBA returns the RGBA value of this color.
+func (c *Color) RGBA() (r, g, b, a uint32) {
+	sR, sG, sB := c.sRGB()
+	return uint32(sR * 65535.0),
+		uint32(sG * 65535.0),
+		uint32(sB * 65535.0),
+		0xFFFF
+}
+
+func (c *Color) sRGB() (r, g, b float64) {
+	// JzAzBz -> L'M'S'
+	jz := c.j + 1.6295499532821566e-11
+	iz := jz / (0.44 + 0.56*jz)
+	l := pqInv(iz + 1.386050432715393e-1*c.a + 5.804731615611869e-2*c.b)
+	m := pqInv(iz - 1.386050432715393e-1*c.a - 5.804731615611891e-2*c.b)
+	s := pqInv(iz - 9.601924202631895e-2*c.a - 8.118918960560390e-1*c.b)
+	// L'M'S' -> CIE XYZ
+	x := 1.661373055774069e+00*l - 9.145230923250668e-01*m + 2.313620767186147e-01*s
+	y := -3.250758740427037e-01*l + 1.571847038366936e+00*m - 2.182538318672940e-01*s
+	z := -9.098281098284756e-02*l - 3.127282905230740e-01*m + 1.522766561305260e+00*s
+	// CIE XYZ -> lRGB -> sRGB
+	r = math.Round(255 * rgbLinearToStandard(3.2404542*x-1.5371385*y-0.4985314*z))
+	g = math.Round(255 * rgbLinearToStandard(-0.9692660*x+1.8760108*y+0.0415560*z))
+	b = math.Round(255 * rgbLinearToStandard(0.0556434*x-0.2040259*y+1.0572252*z))
+	return r, g, b
+}
+
+// FromHex converts a hex color in the form of #RRGGBB to JzAzBz
+// invalid colors will result in black.
+func FromHex(hexStr string) *Color {
+	if hexStr[0] == '#' {
+		hexStr = hexStr[1:]
 	}
-	if n != 3 {
-		return &Color{0, 0, 0}
+	if len(hexStr) != 6 {
+		return black()
 	}
-	// parsed sRGB -> lRGB
-	r := linearize(float64(hr) * factor)
-	g := linearize(float64(hg) * factor)
-	b := linearize(float64(hb) * factor)
+	// hex string -> sRGB -> lRGB
+	r := rgbStandardToLinear(float64(hexByte(hexStr[0])<<4+hexByte(hexStr[1])) / 0xFF)
+	g := rgbStandardToLinear(float64(hexByte(hexStr[2])<<4+hexByte(hexStr[3])) / 0xFF)
+	b := rgbStandardToLinear(float64(hexByte(hexStr[4])<<4+hexByte(hexStr[5])) / 0xFF)
 
 	// lRGB -> CIE XYZ
-	x := 0.41239079926595948*r + 0.35758433938387796*g + 0.18048078840183429*b
-	y := 0.21263900587151036*r + 0.71516867876775593*g + 0.072192315360733715*b
-	z := 0.019330818715591851*r + 0.11919477979462599*g + 0.95053215224966058*b
+	x := 0.4124564*r + 0.3575761*g + 0.1804375*b
+	y := 0.2126729*r + 0.7151522*g + 0.0721750*b
+	z := 0.0193339*r + 0.1191920*g + 0.9503041*b
 
-	// CIE XYZ -> LMS (with "perceptual quantizer" gamma)
+	// CIE XYZ -> L'M'S' (with "perceptual quantizer" gamma)
 	// https://observablehq.com/@jrus/jzazbz
 	lP := pq(0.674207838*x + 0.382799340*y - 0.047570458*z)
 	mP := pq(0.149284160*x + 0.739628340*y + 0.083327300*z)
@@ -157,58 +206,40 @@ func FromHex(colStr string) *Color {
 	}
 }
 
-// Hex returns the RGB HEX string for c.
-func (c *Color) Hex() string {
-	r, g, b := c.rgb()
-	return fmt.Sprintf("#%02x%02x%02x", uint8(r*255.0+0.5), uint8(g*255.0+0.5), uint8(b*255.0+0.5))
-}
-
-// RGBA returns the RGBA value of this color.
-func (c *Color) RGBA() (r, g, b, a uint32) {
-	r1, g1, b1 := c.lrgb()
-	return uint32(r1*65535.0 + 0.5),
-		uint32(g1*65535.0 + 0.5),
-		uint32(b1*65535.0 + 0.5),
-		0xFFFF
-}
-
-func (c *Color) lms() (l, m, s float64) {
-	// Combined matrix values from https://observablehq.com/@jrus/jzazbz
-	const d0 = 1.6295499532821566e-11
-	jz := c.j + d0
-	iz := jz / (0.44 + 0.56*jz)
-	return pqInv(iz + 1.386050432715393e-1*c.a + 5.804731615611869e-2*c.b),
-		pqInv(iz - 1.386050432715393e-1*c.a - 5.804731615611891e-2*c.b),
-		pqInv(iz - 9.601924202631895e-2*c.a - 8.118918960560390e-1*c.b)
-}
-
-func (c *Color) xyz() (x, y, z float64) {
-	l, m, s := c.lms()
-	return 1.661373055774069e+00*l - 9.145230923250668e-01*m + 2.313620767186147e-01*s,
-		-3.250758740427037e-01*l + 1.571847038366936e+00*m - 2.182538318672940e-01*s,
-		9.098281098284756e-02*l - 3.127282905230740e-01*m + 1.522766561305260e+00*s
-}
-
-func (c *Color) rgb() (r, g, b float64) {
-	lR, lG, lB := c.lrgb()
-	return delinearize(lR),
-		delinearize(lG),
-		delinearize(lB)
-}
-
-func (c *Color) lrgb() (r, g, b float64) {
-	x, y, z := c.xyz()
-	return 3.2409699419045214*x - 1.5373831775700935*y - 0.49861076029300328*z,
-		-0.96924363628087983*x + 1.8759675015077207*y + 0.041555057407175613*z,
-		0.055630079696993609*x - 0.20397695888897657*y + 1.0569715142428786*z
-}
-
 func (c *Color) blend(c2 *Color, frac float64) *Color {
 	return &Color{
 		j: lerp(c.j, c2.j, frac),
 		a: lerp(c.a, c2.a, frac),
 		b: lerp(c.b, c2.b, frac),
 	}
+}
+
+func hexByte(b byte) byte {
+	switch {
+	case b >= '0' && b <= '9':
+		return b - '0'
+	case b >= 'a' && b <= 'f':
+		return b - 'a' + 10
+	case b >= 'A' && b <= 'F':
+		return b - 'A' + 10
+	}
+	return 0
+}
+
+func rgbLinearToStandard(l float64) float64 {
+	if l <= 0.0031308 {
+		return 12.92 * l
+	}
+	return 1.055*math.Pow(l, 0.4166666666666667) - 0.055
+}
+
+func rgbStandardToLinear(s float64) float64 {
+	if s <= 0.04045 {
+		// return s / 12.92
+		return 0.07739938080495357 * s
+	}
+	// return math.Pow((s+0.55)/1.055), 2.4)
+	return math.Pow((s+0.055)*0.9478672985781991, 2.4)
 }
 
 func pq(x float64) float64 {
@@ -227,22 +258,6 @@ func pqInv(x float64) float64 {
 		return 0
 	}
 	return v
-}
-
-// linearization (via https://github.com/lucasb-eyer/go-colorful)
-// TODO: fast [de]linearization with clamp?
-func linearize(v float64) float64 {
-	if v <= 0.04045 {
-		return v / 12.92
-	}
-	return math.Pow((v+0.055)/1.055, 2.4)
-}
-
-func delinearize(v float64) float64 {
-	if v <= 0.0031308 {
-		return 12.92 * v
-	}
-	return 1.055*math.Pow(v, 1.0/2.4) - 0.055
 }
 
 func lerp(a, b, f float64) float64 {
