@@ -127,7 +127,7 @@ func (g *Gradient) ColorAt(pos, max int) *Color {
 	return (g.stops[s-1].Color.blend(g.stops[s].Color, f))
 }
 
-// stop is a gradient stop. Offset is (0,1)
+// stop is a gradient stop. Offset is [0,1]
 type stop struct {
 	Color  *Color
 	Offset float64
